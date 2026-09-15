@@ -1,0 +1,17 @@
+{
+  "name": "메소 알러지 쌀숭이",
+  "short_name": "쌀숭이",
+  "description": "메이플스토리 재화와 경험치를 사진으로 기록합니다",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#23415C",
+  "theme_color": "#23415C",
+  "lang": "ko",
+  "icons": [
+    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "./icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
