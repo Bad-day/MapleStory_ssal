@@ -1,9 +1,9 @@
 /* 메소 알러지 쌀숭이 서비스 워커
    앱 껍데기를 캐시해 오프라인에서도 켜지게 한다.
    사진 판독과 넥슨 조회만 네트워크가 필요하고 나머지 기능은 전부 동작한다. */
-const CACHE = "ssalsungi-v2";
+const CACHE = "ssalsungi-v3";
 const SHELL = [
-  "./", "./index.html", "./app.js", "./app.css",
+  "./", "./index.html", "./sync.js", "./app.js", "./app.css",
   "./manifest.webmanifest", "./icon-192.png", "./icon-512.png",
 ];
 
