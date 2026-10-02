@@ -142,31 +142,50 @@
     }, PUSH_DELAY);
   }
 
-  /* 공유 링크 처리: https://.../index.html#e=<암호화된 값>
-     링크에는 토큰이 암호화되어 들어 있고, 암호는 링크와 따로 전달받아 처음 한 번만 입력한다.
-     풀린 닉네임/토큰은 이 브라우저에만 저장하고 주소창에서는 지운 뒤 새로 고친다. */
+  /* 공유 링크: https://.../index.html#k=<압축 후 암호화한 값>
+     {n:닉네임, t:토큰} 을 deflate 로 압축하고 AES-GCM 으로 암호화해 붙인다.
+     암호 입력은 없다. 키가 이 파일 안에 있어 링크가 눈에 안 읽히게 가릴 뿐,
+     코드를 보는 사람까지 막는 보안은 아니므로 링크를 받은 사람만 보도록 전달해야 한다. */
+  var LINK_SECRET = "ssalsungi-share-link-v1";
+
+  function bytesToB64u(u8) {
+    var bin = "";
+    u8.forEach(function (b) { bin += String.fromCharCode(b); });
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
   function b64uToBytes(str) {
     str = str.replace(/-/g, "+").replace(/_/g, "/");
     while (str.length % 4) str += "=";
     return Uint8Array.from(atob(str), function (c) { return c.charCodeAt(0); });
   }
-  async function decryptLink(blob, pass) {
+  async function linkKey(usage) {
+    var h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(LINK_SECRET));
+    return crypto.subtle.importKey("raw", h, "AES-GCM", false, [usage]);
+  }
+  async function pipe(bytes, stream) {
+    var out = new Blob([bytes]).stream().pipeThrough(stream);
+    return new Uint8Array(await new Response(out).arrayBuffer());
+  }
+  async function encodeLink(obj) {
+    var packed = await pipe(new TextEncoder().encode(JSON.stringify(obj)), new CompressionStream("deflate-raw"));
+    var iv = crypto.getRandomValues(new Uint8Array(12));
+    var enc = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, await linkKey("encrypt"), packed));
+    var all = new Uint8Array(12 + enc.length);
+    all.set(iv, 0); all.set(enc, 12);
+    return bytesToB64u(all);
+  }
+  async function decodeLink(blob) {
     var raw = b64uToBytes(blob);
-    var salt = raw.slice(0, 16), iv = raw.slice(16, 28), data = raw.slice(28);
-    var base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pass), "PBKDF2", false, ["deriveKey"]);
-    var key = await crypto.subtle.deriveKey(
-      { name: "PBKDF2", salt: salt, iterations: 200000, hash: "SHA-256" },
-      base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
-    var plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: iv }, key, data);
-    return JSON.parse(new TextDecoder().decode(plain));
+    var plain = new Uint8Array(await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: raw.slice(0, 12) }, await linkKey("decrypt"), raw.slice(12)));
+    var json = await pipe(plain, new DecompressionStream("deflate-raw"));
+    return JSON.parse(new TextDecoder().decode(json));
   }
   (function applyLink() {
     var blob;
-    try { blob = new URLSearchParams(location.hash.replace(/^#/, "")).get("e"); } catch (e) {}
+    try { blob = new URLSearchParams(location.hash.replace(/^#/, "")).get("k"); } catch (e) {}
     if (!blob) return;
-    var pass = prompt("공유 링크의 암호를 입력해주세요.");
-    if (!pass) return;
-    decryptLink(blob, pass).then(function (v) {
+    decodeLink(blob).then(function (v) {
       if (v.t) lsSet(K_TOKEN, String(v.t).trim());
       if (v.n) {
         var cur = {};
@@ -177,7 +196,7 @@
       history.replaceState(null, "", location.pathname + location.search);
       location.reload();
     }).catch(function () {
-      alert("암호가 틀렸거나 링크가 올바르지 않습니다. 링크를 다시 열어 암호를 확인해주세요.");
+      alert("공유 링크가 올바르지 않습니다. 링크가 잘렸는지 확인해주세요.");
     });
   })();
 
@@ -199,6 +218,7 @@
     setToken: function (t) { lsSet(K_TOKEN, String(t || "").trim()); },
     getToken: token,
     repo: REPO,
+    encodeLink: encodeLink,
   };
   window.SsalSync = SsalSync;
 })();
