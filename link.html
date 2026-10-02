@@ -16,7 +16,7 @@
 </head>
 <body>
 <h1>공유 링크 만들기</h1>
-<p class="note">닉네임과 토큰을 압축·암호화해 링크 하나로 만듭니다. 입력한 값은 이 화면 안에서만 쓰이고 어디로도 전송되지 않습니다.
+<p class="note">닉네임과 토큰을 최대한 짧게 압축·암호화해 링크 하나로 만듭니다. 입력한 값은 이 화면 안에서만 쓰이고 어디로도 전송되지 않습니다.
 링크를 가진 사람은 토큰을 쓸 수 있으니 <b>믿는 사람에게만</b> 전달하세요.</p>
 
 <label for="n">캐릭터 닉네임 (선택)</label>
@@ -38,7 +38,7 @@ $("go").onclick = async () => {
   const t = $("t").value.trim(), n = $("n").value.trim();
   if (!t) return alert("토큰을 입력해주세요.");
   const blob = await SsalSync.encodeLink({ t, n });
-  const base = location.href.replace(/link\.html.*$/, "index.html");
+  const base = location.href.replace(/link\.html.*$/, "");
   $("url").value = base + "#k=" + blob;
   $("out").hidden = false;
 };

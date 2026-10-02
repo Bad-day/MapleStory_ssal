@@ -142,11 +142,15 @@
     }, PUSH_DELAY);
   }
 
-  /* 공유 링크: https://.../index.html#k=<압축 후 암호화한 값>
-     {n:닉네임, t:토큰} 을 deflate 로 압축하고 AES-GCM 으로 암호화해 붙인다.
-     암호 입력은 없다. 키가 이 파일 안에 있어 링크가 눈에 안 읽히게 가릴 뿐,
-     코드를 보는 사람까지 막는 보안은 아니므로 링크를 받은 사람만 보도록 전달해야 한다. */
-  var LINK_SECRET = "ssalsungi-share-link-v1";
+  /* 공유 링크: https://.../#k=<값>
+     {n:닉네임, t:토큰} 을 최대한 짧게 줄인다.
+       - 토큰이 github_pat_ 로 시작하면 접두사를 떼고 본문 글자(A-Za-z0-9_)를 6비트씩 채운다.
+       - 바이트 열 전체에 고정 키에서 만든 값을 XOR 해 알아보기 어렵게 하고, 마지막에 검사 바이트 1개를 붙인다.
+     암호 입력은 없고 키가 이 파일 안에 있어, 링크가 눈에 안 읽히게 가릴 뿐 코드를 보는 사람까지 막는 보안은 아니다.
+     링크를 받은 사람만 보도록 전달해야 한다. */
+  var LINK_SECRET = "ssalsungi-share-link-v2";
+  var PAT_PREFIX = "github_pat_";
+  var B6 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_";
 
   function bytesToB64u(u8) {
     var bin = "";
@@ -158,28 +162,70 @@
     while (str.length % 4) str += "=";
     return Uint8Array.from(atob(str), function (c) { return c.charCodeAt(0); });
   }
-  async function linkKey(usage) {
-    var h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(LINK_SECRET));
-    return crypto.subtle.importKey("raw", h, "AES-GCM", false, [usage]);
+  /* 고정 키로 만든 의사 난수 열 (mulberry32) */
+  function keystream(n) {
+    var seed = 0;
+    for (var i = 0; i < LINK_SECRET.length; i++) seed = (Math.imul(seed, 31) + LINK_SECRET.charCodeAt(i)) >>> 0;
+    var out = new Uint8Array(n);
+    for (var j = 0; j < n; j++) {
+      seed = (seed + 0x6D2B79F5) >>> 0;
+      var t = seed;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      out[j] = ((t ^ (t >>> 14)) >>> 0) & 255;
+    }
+    return out;
   }
-  async function pipe(bytes, stream) {
-    var out = new Blob([bytes]).stream().pipeThrough(stream);
-    return new Uint8Array(await new Response(out).arrayBuffer());
+  function xor(u8) {
+    var ks = keystream(u8.length);
+    return u8.map(function (b, i) { return b ^ ks[i]; });
   }
+  function checksum(u8, len) {
+    var c = 0x5a;
+    for (var i = 0; i < len; i++) c = (c * 31 + u8[i]) & 255;
+    return c;
+  }
+  function pack6(str) {
+    var bits = "";
+    for (var i = 0; i < str.length; i++) bits += ("00000" + B6.indexOf(str[i]).toString(2)).slice(-6);
+    while (bits.length % 8) bits += "0";
+    var out = new Uint8Array(bits.length / 8);
+    for (var k = 0; k < out.length; k++) out[k] = parseInt(bits.substr(k * 8, 8), 2);
+    return out;
+  }
+  function unpack6(u8, n) {
+    var bits = "";
+    u8.forEach(function (b) { bits += ("0000000" + b.toString(2)).slice(-8); });
+    var s = "";
+    for (var i = 0; i < n; i++) s += B6[parseInt(bits.substr(i * 6, 6), 2)];
+    return s;
+  }
+  /* 구성: [닉네임 바이트수|0x80=토큰 압축][토큰 글자수][닉네임][토큰][검사] */
   async function encodeLink(obj) {
-    var packed = await pipe(new TextEncoder().encode(JSON.stringify(obj)), new CompressionStream("deflate-raw"));
-    var iv = crypto.getRandomValues(new Uint8Array(12));
-    var enc = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, await linkKey("encrypt"), packed));
-    var all = new Uint8Array(12 + enc.length);
-    all.set(iv, 0); all.set(enc, 12);
-    return bytesToB64u(all);
+    var nick = new TextEncoder().encode(String(obj.n || ""));
+    var t = String(obj.t || "");
+    var body = t.indexOf(PAT_PREFIX) === 0 ? t.slice(PAT_PREFIX.length) : null;
+    var packed = body !== null && /^[A-Za-z0-9_]+$/.test(body) && body.length < 256;
+    if (nick.length > 127) throw new Error("닉네임이 너무 깁니다.");
+    var tok = packed ? pack6(body) : new TextEncoder().encode(t);
+    var n = packed ? body.length : tok.length;
+    if (n > 255) throw new Error("토큰이 너무 깁니다.");
+    var raw = new Uint8Array(2 + nick.length + tok.length + 1);
+    raw[0] = nick.length | (packed ? 0x80 : 0);
+    raw[1] = n;
+    raw.set(nick, 2);
+    raw.set(tok, 2 + nick.length);
+    raw[raw.length - 1] = checksum(raw, raw.length - 1);
+    return bytesToB64u(xor(raw));
   }
   async function decodeLink(blob) {
-    var raw = b64uToBytes(blob);
-    var plain = new Uint8Array(await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: raw.slice(0, 12) }, await linkKey("decrypt"), raw.slice(12)));
-    var json = await pipe(plain, new DecompressionStream("deflate-raw"));
-    return JSON.parse(new TextDecoder().decode(json));
+    var raw = xor(b64uToBytes(blob));
+    if (raw.length < 3 || raw[raw.length - 1] !== checksum(raw, raw.length - 1)) throw new Error("bad");
+    var packed = !!(raw[0] & 0x80), nl = raw[0] & 0x7f, n = raw[1];
+    var nick = new TextDecoder().decode(raw.slice(2, 2 + nl));
+    var tb = raw.slice(2 + nl, raw.length - 1);
+    var t = packed ? PAT_PREFIX + unpack6(tb, n) : new TextDecoder().decode(tb);
+    return { n: nick, t: t };
   }
   (function applyLink() {
     var blob;
